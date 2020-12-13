@@ -1,0 +1,392 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Std;
+
+# パラメータ
+my $COMMUNITY = 'public';
+my $SNMPGET   = '/usr/bin/snmpget -v 2c -c';
+my $SNMPWALK  = '/usr/bin/snmpbulkwalk -v 2c -c';
+my $DATECMD   = '/bin/date';
+
+# 2020/12/08 10:59:41
+#          1         2         3         4         5         6         7         8         9        10
+# 1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+# 12345678901234567890 123456789012345 1234 123 12  12345  123 12  12345  1234567890123456789012345678
+# sysName              ifName          oper IN  bps Error  OUT bps Error  Description
+# --------------------+---------------+----+--------------+--------------+----------------------------
+# tokyo-router001      Eterhnet001     up   111.11M 99999* 222.22M 99999* hogehoge hugahuga
+
+# 文字色
+my %CLR = (
+    r => "\033[31m",
+    g => "\033[32m",
+    y => "\033[33m",
+    b => "\033[94m",
+    p => "\033[35m",
+    s => "\033[36m",
+    w => "\033[0m\033[40m\033[97m",
+    N => "\033[39m",
+    R => "\033[1m\033[41m\033[37m",
+);
+
+# 背景色
+my %BG_CLR = (
+    b => "\033[40m",
+    N => "\033[49m",
+);
+
+# 文字を白、背景を黒に設定
+print "$CLR{w}";
+print "$BG_CLR{b}";
+
+# オプション取得
+my %opts;
+getopts("c:i:l:qh", \%opts);
+
+# ヘルプを表示して終了
+if($opts{h}) {
+    &usage();
+    # 文字色と背景色を元に戻す
+    print "$CLR{N}";
+    print "$BG_CLR{N}";
+    exit;
+}
+# 引数がない場合もヘルプを表示して終了
+if($#ARGV == -1) {
+    &usage();
+    # 文字色と背景色を元に戻す
+    print "$CLR{N}";
+    print "$BG_CLR{N}";
+    exit;
+}
+
+# INT ハンドラ定義
+$SIG{INT} = "sigexit";
+
+# 対象ノードと ifIndex を取得
+my $node;
+my @node_ifindexes;
+
+foreach (@ARGV) {
+    if(/^\d+$/) {
+        push(@node_ifindexes, "$node $_");
+    }
+    elsif((/^\d+\.\d+\.\d+\.\d+$/) || (/^\S+$/)) {
+        $node = $_;
+    }
+}
+
+# 変数定義
+my ($i, $sec, $min, $hour, $mday, $mon, $year, $date);
+my ($line, $sysname, $ifindex, $key_str, $header);
+my (@lines);
+my (%pre, %now, %err, %scale);
+
+# SNMP community 設定
+if($opts{c}) {
+    $COMMUNITY = $opts{c};
+}
+# 取得間隔(秒)設定
+my $WAIT = 10;
+if($opts{i}) {
+    if($opts{i} > 0) {
+        $WAIT = $opts{i};
+    }
+}
+# 取得回数設定
+my $LOOP = 300;
+if($opts{l}) {
+    if($opts{l} > 0) {
+        $LOOP = $opts{l};
+    }
+}
+
+# 表示文字数の初期値設定
+$scale{sysName} = 7;
+$scale{ifName}  = 6;
+$scale{ifAlias} = 11;
+
+# ifIndex を検索するために ifName を snmpbulkwalk で取得して表示し終了
+if($opts{q}) {
+    open(SNMP, "$SNMPGET $COMMUNITY $node sysName.0|");
+    @lines = <SNMP>;
+    close(SNMP);
+    chomp(@lines);
+
+    foreach $line (@lines) {
+        if($line =~ /^.*STRING\:\s+(\S+)/) { $sysname = $1;
+        }
+    }
+
+    open(SNMP, "$SNMPWALK $COMMUNITY $node ifName|");
+    @lines = <SNMP>;
+    close(SNMP);
+    chomp(@lines);
+
+    foreach $line (@lines) {
+        print "$sysname $line\n";
+    }
+
+    print "$CLR{N}";
+    print "$BG_CLR{N}";
+    exit;
+}
+
+print "----- 指定オプション -----\n";
+print "SNMP community: $COMMUNITY\n";
+print "      取得間隔: $WAIT 秒\n";
+print "      取得回数: $LOOP 回\n";
+print "--------------------------\n\n";
+
+# メイン処理
+for($i = 0; $i <= $LOOP; $i++) {
+    ($sec, $min, $hour, $mday, $mon, $year, undef, undef, undef) = gmtime(time + 9*60*60);
+    $date = sprintf("%04d\/%02d\/%02d %02d\:%02d\:%02d", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
+
+    print "$CLR{b}$date$CLR{w}\n";
+
+    if($i) {
+        print "$header\n";
+    }
+
+    foreach (@node_ifindexes) {
+        ($node, $ifindex) = split(/\s+/, $_);
+
+        if($i == 0) {
+            open(SNMP, "$SNMPGET $COMMUNITY $node sysName.0|");
+            @lines = <SNMP>;
+            close(SNMP);
+            chomp(@lines);
+
+            foreach $line (@lines) {
+                if($line =~ /^.*STRING\:\s+(\S+)/) {
+                    $now{$node}{$ifindex}{sysName} = $1;
+                }
+            }
+
+            open(SNMP, "$SNMPGET $COMMUNITY $node ifName.$ifindex ifOperStatus.$ifindex ifHCInOctets.$ifindex ifInErrors.$ifindex ifHCOutOctets.$ifindex ifOutErrors.$ifindex ifAlias.$ifindex|");
+        }
+        else {
+            open(SNMP, "$SNMPGET $COMMUNITY $node ifOperStatus.$ifindex ifHCInOctets.$ifindex ifInErrors.$ifindex ifHCOutOctets.$ifindex ifOutErrors.$ifindex|");
+            $now{$node}{$ifindex}{sysName}  = $pre{$node}{$ifindex}{sysName};
+            $now{$node}{$ifindex}{ifName}   = $pre{$node}{$ifindex}{ifName};
+            $now{$node}{$ifindex}{ifAlias}  = $pre{$node}{$ifindex}{ifAlias};
+        }
+        @lines = <SNMP>;
+        close(SNMP);
+        chomp(@lines);
+
+        $now{$node}{$ifindex}{msec} = &get_msec();
+
+        foreach $line (@lines) {
+            if($line =~ /\:\:(\w+)\.\d+\s+\=\s+\S+\:\s+(.*)/) {
+                $now{$node}{$ifindex}{$1} = $2;
+            }
+        }
+        &print_snmp_val($node, $ifindex, $i, \%pre, \%now, \%err, \%scale);
+    }
+
+    if($i == 0) {
+        $header = &make_header(\%scale);
+        print "$header\n";
+
+        foreach (@node_ifindexes) {
+            ($node, $ifindex) = split(/\s+/, $_);
+            printf("%-$scale{sysName}s %-$scale{ifName}s %-4s                               %-$scale{ifAlias}s\n",
+                $now{$node}{$ifindex}{sysName},
+                $now{$node}{$ifindex}{ifName},
+                $now{$node}{$ifindex}{ifOperStatus},
+                $now{$node}{$ifindex}{ifAlias}
+            );
+        }
+    }
+
+    undef(%pre);
+    %pre = %now;
+    undef(%now);
+
+    select(undef, undef, undef, $WAIT);
+}
+
+&sigexit();
+
+sub make_header {
+    my ($scale_ref) = @_;
+
+    my ($i, $header);
+
+    $header  = sprintf("%-$scale_ref->{sysName}s ", 'sysName');
+    $header .= sprintf("%-$scale_ref->{ifName}s ", 'ifName');
+    $header .= sprintf("%4s ", 'oper IN  bps Error  OUT bps Error ');
+    $header .= sprintf("%s\n", 'Description');
+    for($i = 0; $i < $scale_ref->{sysName}; $i++) {
+        $header .= sprintf("%s", '-');
+    }
+    $header .= sprintf("%s", '+');
+    for($i = 0; $i < $scale_ref->{ifName}; $i++) {
+        $header .= sprintf("%s", '-');
+    }
+    $header .= sprintf("%s", '+----+--------------+--------------+');
+    for($i = 0; $i < $scale_ref->{ifAlias}; $i++) {
+        $header .= sprintf("%s", '-');
+    }
+
+    return($header);
+}
+
+sub print_snmp_val {
+    my ($node, $ifindex, $flg, $pre_ref, $now_ref, $err_ref, $scale_ref) = @_;
+    my ($delta_msec, $inbps, $outbps, $inerr, $outerr);
+
+    $now_ref->{$node}{$ifindex}{ifOperStatus} =~ s/\(\d+\)//;
+
+    if($flg == 0) {
+        if(exists($now_ref->{$node}{$ifindex}{sysName})) {
+            if(length($now_ref->{$node}{$ifindex}{sysName}) > $scale_ref->{sysName}) {
+                $scale_ref->{sysName} = length($now_ref->{$node}{$ifindex}{sysName});
+            }
+        }
+        if(exists($now_ref->{$node}{$ifindex}{ifName})) {
+            if(length($now_ref->{$node}{$ifindex}{ifName}) > $scale_ref->{ifName}) {
+                $scale_ref->{ifName} = length($now_ref->{$node}{$ifindex}{ifName});
+            }
+        }
+        if(exists($now_ref->{$node}{$ifindex}{ifAlias})) {
+            if(length($now_ref->{$node}{$ifindex}{ifAlias}) > $scale_ref->{ifAlias}) {
+                $scale_ref->{ifAlias} = length($now_ref->{$node}{$ifindex}{ifAlias});
+            }
+        }
+    }
+    else {
+        printf("%-$scale_ref->{sysName}s ", $now{$node}{$ifindex}{sysName});
+
+        $delta_msec = $now_ref->{$node}{$ifindex}{msec} - $pre_ref->{$node}{$ifindex}{msec};
+        if($delta_msec < 0) { $delta_msec += 60000; }
+
+        $inbps  = $now_ref->{$node}{$ifindex}{ifHCInOctets}  - $pre_ref->{$node}{$ifindex}{ifHCInOctets};
+        $outbps = $now_ref->{$node}{$ifindex}{ifHCOutOctets} - $pre_ref->{$node}{$ifindex}{ifHCOutOctets};
+        $inbps  = &audit_unit($inbps,  $delta_msec);
+        $outbps = &audit_unit($outbps, $delta_msec);
+
+        $inerr  = $now_ref->{$node}{$ifindex}{ifInErrors}  - $pre_ref->{$node}{$ifindex}{ifInErrors};
+        $outerr = $now_ref->{$node}{$ifindex}{ifOutErrors} - $pre_ref->{$node}{$ifindex}{ifOutErrors};
+        if($inerr) {
+            $err_ref->{$node}{$ifindex}{ifInErrors}++;
+            $inerr = "$CLR{R}$inerr$CLR{w}";
+        }
+        if($outerr) {
+            $err_ref->{$node}{$ifindex}{ifOutErrors}++;
+            $outerr = "$CLR{R}$outerr$CLR{w}";
+        }
+
+        printf("%-$scale_ref->{ifName}s %-4s ",
+            $now_ref->{$node}{$ifindex}{ifName},
+            $now_ref->{$node}{$ifindex}{ifOperStatus}
+        );
+
+        if($now_ref->{$node}{$ifindex}{ifOperStatus} =~ /up/) {
+            printf("%s%7s %s", $CLR{g}, $inbps, $CLR{w});
+        }
+        else {
+            printf("%s%7s %s", $CLR{r}, $inbps, $CLR{w});
+        }
+
+        if(exists($err_ref->{$node}{$ifindex}{ifInErrors})) {
+            printf("%5d\* ", $inerr);
+        }
+        else {
+            printf("%5d  ", $inerr);
+        }
+
+        if($now_ref->{$node}{$ifindex}{ifOperStatus} =~ /up/) {
+            printf("%s%7s %s", $CLR{g}, $outbps, $CLR{w});
+        }
+        else {
+            printf("%s%7s %s", $CLR{r}, $outbps, $CLR{w});
+        }
+
+        if(exists($err_ref->{$node}{$ifindex}{ifOutErrors})) {
+            printf("%5d\* ", $outerr);
+        }
+        else {
+            printf("%5d  ", $outerr);
+        }
+
+        printf("%-$scale_ref->{ifAlias}s\n", $now_ref->{$node}{$ifindex}{ifAlias});
+    }
+}
+
+sub sigexit {
+    # 文字色と背景色を元に戻す
+    print "$CLR{N}";
+    print "$BG_CLR{N}";
+    exit;
+}
+
+sub audit_unit {
+    my ($val, $msec) = @_;
+    my ($wait_sec, $ret_str);
+
+    $wait_sec = $msec / 1000;
+
+    $val *= 8;
+    $val /= $wait_sec;
+
+    if($val > 1000000000) { $ret_str = sprintf("%3.2fG", ($val / 1000000000)); }
+    elsif($val > 1000000) { $ret_str = sprintf("%3.2fM", ($val / 1000000)); }
+    elsif($val == 0)      { $ret_str = '0    '; }
+    else                  { $ret_str = sprintf("%3.2fK", ($val / 1000)); }
+
+    return($ret_str);
+}
+
+sub get_msec {
+    open(SEC, "$DATECMD +%S%N|");
+    my $str = <SEC>;
+    close(SEC);
+
+    # 19522103220
+    # ssnnnnnnnnn
+    # 12123456789
+    $str =~ s/\n//;
+    $str =~ s/\r//;
+
+    my $msec;
+
+    if($str =~ /^(\d{2})(\d{9})$/) {
+        $msec = $1 * 1000 + $2 / 1000000;
+        $msec = sprintf("%05d", $msec);
+    }
+    return ($msec);
+}
+
+sub usage {
+print <<'USAGE';
+使用方法
+mifmonitor [-c <SNMP community>] [-i <取得間隔(秒)>] [-l <取得回数>] 対象ノード ifIndex ... 対象ノード ifIndex ...
+mifmonitor [-c <SNMP community>] -q 対象ノード
+
+  対象ノード: IPアドレス または ホスト名で指定 (複数ノード指定可能)
+  ifIndex: モニター対象の ifIndex を指定 (スペース区切りで複数指定可能)
+
+  -c  SNMP community
+      文字列で指定
+      Default: public
+
+  -i  取得間隔(秒)
+      数字で指定
+      Default: 10秒
+
+  -l  取得回数
+      数字で指定
+      Default: 300回
+
+  -q  ifIndex を検索するために ifName を snmpbulkwalk で取得して表示し終了
+
+  -h  ヘルプメッセージを表示
+
+USAGE
+}
+
