@@ -294,10 +294,10 @@ sub print_snmp_val {
         }
 
         if(exists($err_ref->{$node}{$ifindex}{ifInErrors})) {
-            printf("%5d\* ", $inerr);
+            printf("%5s\* ", $inerr);
         }
         else {
-            printf("%5d  ", $inerr);
+            printf("%5s  ", $inerr);
         }
 
         if($now_ref->{$node}{$ifindex}{ifOperStatus} =~ /up/) {
@@ -308,10 +308,10 @@ sub print_snmp_val {
         }
 
         if(exists($err_ref->{$node}{$ifindex}{ifOutErrors})) {
-            printf("%5d\* ", $outerr);
+            printf("%5s\* ", $outerr);
         }
         else {
-            printf("%5d  ", $outerr);
+            printf("%5s  ", $outerr);
         }
 
         printf("%-$scale_ref->{ifAlias}s\n", $now_ref->{$node}{$ifindex}{ifAlias});
